@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Live Voice Transcription Test</title>
+</head>
+<body>
+  <h2>Live Voice Transcription (WebSocket Test)</h2>
+  <button id="start">Start</button>
+  <button id="stop" disabled>Stop</button>
+  <div id="status"></div>
+  <pre id="transcript"></pre>
+  <script>
+    let ws, audioContext, processor, input, stream;
+    let running = false;
+
+    function floatTo16BitPCM(input) {
+      let output = new Int16Array(input.length);
+      for (let i = 0; i < input.length; i++) {
+        let s = Math.max(-1, Math.min(1, input[i]));
+        output[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      return output;
+    }
+
+    document.getElementById('start').onclick = async function() {
+      ws = new WebSocket("ws://127.0.0.1:8000/ws/transcribe");
+      ws.binaryType = "arraybuffer";
+      document.getElementById('status').innerText = "Connecting...";
+      ws.onopen = async function() {
+        document.getElementById('status').innerText = "Connected. Speak now!";
+        document.getElementById('start').disabled = true;
+        document.getElementById('stop').disabled = false;
+        running = true;
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+        input = audioContext.createMediaStreamSource(stream);
+        processor = audioContext.createScriptProcessor(4096, 1, 1);
+        input.connect(processor);
+        processor.connect(audioContext.destination);
+        processor.onaudioprocess = function(e) {
+          if (!running) return;
+          let pcm = floatTo16BitPCM(e.inputBuffer.getChannelData(0));
+          ws.send(pcm.buffer);
+        };
+      };
+      ws.onmessage = function(event) {
+        let data = JSON.parse(event.data);
+        if (data.transcript) {
+          document.getElementById('transcript').innerText += data.transcript + '\n';
+        }
+        if (data.error) {
+          document.getElementById('transcript').innerText += '[ERROR] ' + data.error + '\n';
+        }
+      };
+      ws.onclose = function() {
+        document.getElementById('status').innerText = "Disconnected.";
+        document.getElementById('start').disabled = false;
+        document.getElementById('stop').disabled = true;
+        running = false;
+      };
+      ws.onerror = function() {
+        document.getElementById('status').innerText = "WebSocket error!";
+      };
+    };
+
+    document.getElementById('stop').onclick = function() {
+      running = false;
+      if (processor) processor.disconnect();
+      if (input) input.disconnect();
+      if (audioContext) audioContext.close();
+      if (stream) stream.getTracks().forEach(track => track.stop());
+      if (ws) ws.close();
+      document.getElementById('status').innerText = "Stopped.";
+      document.getElementById('start').disabled = false;
+      document.getElementById('stop').disabled = true;
+    };
+  </script>
+</body>
+</html> 
